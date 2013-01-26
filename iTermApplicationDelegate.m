@@ -48,6 +48,7 @@ static NSString *APP_SUPPORT_DIR = @"~/Library/Application Support/iTerm";
 static NSString *SCRIPT_DIRECTORY = @"~/Library/Application Support/iTerm/Scripts";
 static NSString* AUTO_LAUNCH_SCRIPT = @"~/Library/Application Support/iTerm/AutoLaunch.scpt";
 static NSString *ITERM2_FLAG = @"~/Library/Application Support/iTerm/version.txt";
+static NSString *ITERM2_QUIET = @"~/Library/Application Support/iTerm/quiet";
 static NSString *kUseBackgroundPatternIndicatorKey = @"Use background pattern indicator";
 NSString *kUseBackgroundPatternIndicatorChangedNotification = @"kUseBackgroundPatternIndicatorChangedNotification";
 static BOOL gStartupActivitiesPerformed = NO;
@@ -261,7 +262,33 @@ static BOOL hasBecomeActive = NO;
     CFStringRef unixExecutableContentType = (CFStringRef)@"public.unix-executable";
     CFStringRef unixHandler = LSCopyDefaultRoleHandlerForContentType(unixExecutableContentType, kLSRolesShell);
     NSString *iTermBundleId = [[NSBundle mainBundle] bundleIdentifier];
-    return [iTermBundleId isEqualToString:(NSString *)unixHandler];
+    BOOL result = [iTermBundleId isEqualToString:(NSString *)unixHandler];
+    if (unixHandler) {
+        CFRelease(unixHandler);
+    }
+    return result;
+}
+
+- (NSString *)quietFileName {
+    return [ITERM2_QUIET stringByExpandingTildeInPath];
+}
+
+- (BOOL)quietFileExists {
+    return [[NSFileManager defaultManager] fileExistsAtPath:[self quietFileName]];
+}
+
+- (void)checkForQuietMode {
+    if ([self quietFileExists]) {
+        NSError *error = nil;
+        [[NSFileManager defaultManager] removeItemAtPath:[self quietFileName]
+                                                   error:&error];
+        if (error) {
+            NSLog(@"Failed to remove %@: %@; not launching in quiet mode", [self quietFileName], error);
+        } else {
+            NSLog(@"%@ exists, launching in quiet mode", [self quietFileName]);
+            quiet_ = YES;
+        }
+    }
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification
@@ -296,6 +323,7 @@ static BOOL hasBecomeActive = NO;
                                                        returnTypes:[NSArray arrayWithObjects:NSFilenamesPboardType, NSStringPboardType, nil]];
     // Sometimes, open untitled doc isn't called in Lion. We need to give application:openFile:
     // a chance to run because a "special" filename cancels _performStartupActivities.
+    [self checkForQuietMode];
     [self performSelector:@selector(_performStartupActivities)
                withObject:nil
                afterDelay:0];
@@ -474,12 +502,20 @@ static BOOL hasBecomeActive = NO;
     return YES;
 }
 
+- (void)userDidInteractWithASession
+{
+    userHasInteractedWithAnySession_ = YES;
+}
+
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)app
 {
-    NSNumber* pref = [[NSUserDefaults standardUserDefaults] objectForKey:@"MinRunningTime"];
-    const double kMinRunningTime =  pref ? [pref floatValue] : 10;
-    if ([[NSDate date] timeIntervalSinceDate:launchTime_] < kMinRunningTime) {
-        return NO;
+    if (!userHasInteractedWithAnySession_) {
+        NSNumber* pref = [[NSUserDefaults standardUserDefaults] objectForKey:@"MinRunningTime"];
+        const double kMinRunningTime =  pref ? [pref floatValue] : 10;
+        if ([[NSDate date] timeIntervalSinceDate:launchTime_] < kMinRunningTime) {
+            NSLog(@"Not quitting iTerm2 because it ran very briefly and had no user interaction. Set the MinRunningTime float preference to 0 to turn this feature off.");
+            return NO;
+        }
     }
     quittingBecauseLastWindowClosed_ = [[PreferencePanel sharedInstance] quitWhenAllWindowsClosed];
     return quittingBecauseLastWindowClosed_;
@@ -725,6 +761,9 @@ static BOOL hasBecomeActive = NO;
         return;
     }
     id bm = [[PreferencePanel sharedInstance] handlerBookmarkForURL:urlType];
+    if (!bm) {
+        bm = [[ProfileModel sharedInstance] defaultBookmark];
+    }
     if (bm) {
         PseudoTerminal *term = [[iTermController sharedInstance] currentTerminal];
         [[iTermController sharedInstance] launchBookmark:bm
@@ -966,35 +1005,38 @@ static void FlushDebugLog() {
 // Debug logging
 -(IBAction)debugLogging:(id)sender
 {
-        if (!gDebugLogging) {
-                NSRunAlertPanel(@"Debug Logging Enabled",
-                                                @"Writing to /tmp/debuglog.txt",
-                                                @"OK", nil, nil);
-                gDebugLogFile = open("/tmp/debuglog.txt", O_TRUNC | O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
-                gDebugLogStr = [[NSMutableString alloc] init];
-                gDebugLogStr2 = [[NSMutableString alloc] init];
-                gDebugLogging = !gDebugLogging;
-        } else {
-                gDebugLogging = !gDebugLogging;
-                SwapDebugLog();
-                FlushDebugLog();
-                SwapDebugLog();
-                FlushDebugLog();
-
-                close(gDebugLogFile);
-                gDebugLogFile=-1;
-                NSRunAlertPanel(@"Debug Logging Stopped",
-                                                @"Please compress and send /tmp/debuglog.txt to the developers.",
-                                                @"OK", nil, nil);
-                [gDebugLogStr release];
-                [gDebugLogStr2 release];
-        }
+    if (!gDebugLogging) {
+        NSRunAlertPanel(@"Debug Logging Enabled",
+                        @"Writing to /tmp/debuglog.txt",
+                        @"OK", nil, nil);
+        gDebugLogFile = open("/tmp/debuglog.txt", O_TRUNC | O_CREAT | O_WRONLY, S_IRUSR | S_IWUSR);
+        gDebugLogStr = [[NSMutableString alloc] init];
+        gDebugLogStr2 = [[NSMutableString alloc] init];
+        gDebugLogging = !gDebugLogging;
+    } else {
+        gDebugLogging = !gDebugLogging;
+        SwapDebugLog();
+        FlushDebugLog();
+        SwapDebugLog();
+        FlushDebugLog();
+        
+        close(gDebugLogFile);
+        gDebugLogFile=-1;
+        NSRunAlertPanel(@"Debug Logging Stopped",
+                        @"Please compress and send /tmp/debuglog.txt to the developers.",
+                        @"OK", nil, nil);
+        [gDebugLogStr release];
+        [gDebugLogStr2 release];
+    }
 }
 
 int DebugLogImpl(const char *file, int line, const char *function, NSString* value)
 {
     if (gDebugLogging) {
-        [gDebugLogStr appendFormat:@"%s:%d (%s): ", file, line, function];
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+
+        [gDebugLogStr appendFormat:@"%ld.%08ld %s:%d (%s): ", (long long)tv.tv_sec, (long long)tv.tv_usec, file, line, function];
         [gDebugLogStr appendString:value];
         [gDebugLogStr appendString:@"\n"];
         if ([gDebugLogStr length] > 100000000) {
@@ -1300,7 +1342,7 @@ int DebugLogImpl(const char *file, int line, const char *function, NSString* val
     [scriptIcon setSize: NSMakeSize(16, 16)];
 
     // create menu item with no title and set image
-    NSMenuItem *scriptMenuItem = [[NSMenuItem alloc] initWithTitle: @"" action: nil keyEquivalent: @""];
+    NSMenuItem *scriptMenuItem = [[[NSMenuItem alloc] initWithTitle: @"" action: nil keyEquivalent: @""] autorelease];
     [scriptMenuItem setImage: scriptIcon];
 
     // create submenu
@@ -1346,7 +1388,6 @@ int DebugLogImpl(const char *file, int line, const char *function, NSString* val
     // add new menu item
     if (count) {
         [[NSApp mainMenu] insertItem:scriptMenuItem atIndex:5];
-        [scriptMenuItem release];
         [scriptMenuItem setTitle:NSLocalizedStringFromTableInBundle(@"Script",
                                                                     @"iTerm",
                                                                     [NSBundle bundleForClass:[iTermController class]],

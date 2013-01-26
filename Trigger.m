@@ -23,7 +23,7 @@ NSString * const kTriggerParameterKey = @"parameter";
 {
     NSString *className = [dict objectForKey:kTriggerActionKey];
     Class class = NSClassFromString(className);
-    Trigger *trigger = [[class alloc] init];
+    Trigger *trigger = [[[class alloc] init] autorelease];
     trigger.regex = [dict objectForKey:kTriggerRegexKey];
     trigger.param = [dict objectForKey:kTriggerParameterKey];
     return trigger;
@@ -57,6 +57,16 @@ NSString * const kTriggerParameterKey = @"parameter";
 - (NSDictionary *)menuItemsForPoupupButton
 {
     return nil;
+}
+
+- (NSArray *)groupedMenuItemsForPopupButton
+{
+  NSDictionary *menuItems = [self menuItemsForPoupupButton];
+  if (menuItems) {
+    return [NSArray arrayWithObject:menuItems];
+  } else {
+    return nil;
+  }
 }
 
 - (void)dealloc {
@@ -119,9 +129,9 @@ NSString * const kTriggerParameterKey = @"parameter";
     return 0;
 }
 
-- (NSArray *)tagsSortedByValue
+- (NSArray *)tagsSortedByValueInDict:(NSDictionary *)dict
 {
-    return nil;
+    return [dict keysSortedByValueUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
 }
 
 @end
